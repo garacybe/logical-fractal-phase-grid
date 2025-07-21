@@ -7,6 +7,8 @@ open the file → fumble with sliders and buttons
 an abstract sandbox where a few micro-equations get drunk together, collapse into glowing threads, then arrange themselves into a laser mandala you can fly through or flatten into a tabletop map. 
 The whole thing fits in a single html file, so it feels like you smuggled an alien kaleidoscope inside a text message.
 
+<img width="320" height="200" alt="logical fractal phase grid html" src="https://github.com/user-attachments/assets/6f852aee-1fc2-4276-b6a4-2f09b611ef1c" />
+
 
 ## cybernetic hallucination under 25 kb  
 
