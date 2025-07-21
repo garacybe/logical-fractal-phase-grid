@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>logical fractal phase grid</title>
+    <style>
+        :root {
+            --bg-color: #050508;
+            --fg-color: #a0a0a0;
+            --accent-color: #00ffff;
+            --panel-bg: rgba(0, 0, 0, 0.6);
+        }
+        body, html {
+            background-color: var(--bg-color);
+            color: var(--fg-color);
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0;
+            overflow: hidden;
+        }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        canvas:not([data-locked="true"]) { cursor: pointer; }
+        canvas[data-locked="true"] { cursor: none; }
+        
+        #info-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 15px;
+            background: var(--panel-bg);
+            border: 1px solid var(--accent-color);
+            max-width: 350px;
+            user-select: none;
+            transition: opacity 0.3s, transform 0.3s;
+        }
+        #info-panel.hidden {
+            opacity: 0;
+            transform: translateX(-20px);
+            pointer-events: none;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            cursor: move;
+            margin-bottom: 10px;
+        }
+        #ui-toggle-btn {
+            font-size: 0.8em;
+            cursor: pointer;
+            color: var(--fg-color);
+            transition: color 0.2s;
+        }
+        #ui-toggle-btn:hover {
+            color: var(--accent-color);
+        }
+
+        h1 { font-size: 1.2em; margin: 0; color: var(--accent-color); text-transform: lowercase; }
+        p { margin: 0 0 15px 0; font-size: 0.9em; line-height: 1.4; }
+        .controls { display: flex; flex-direction: column; gap: 15px; pointer-events: all; }
+        .buttons { display: flex; flex-direction: column; gap: 10px; }
+        .button-row { display: flex; gap: 10px; }
+        button {
+            background: transparent;
+            border: 1px solid var(--accent-color);
+            color: var(--accent-color);
+            padding: 10px 15px;
+            font-family: inherit;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background 0.3s, color 0.3s;
+            flex-grow: 1;
+        }
+        button:hover { background: var(--accent-color); color: var(--bg-color); }
+        .sliders { display: flex; flex-direction: column; gap: 5px; }
+        .slider-control { display: flex; align-items: center; gap: 10px; }
+        .slider-control label { width: 80px; font-size: 0.9em; }
+        input[type="range"] { -webkit-appearance: none; flex-grow: 1; height: 2px; background: var(--accent-color); outline: none; opacity: 0.7; transition: opacity .2s; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 15px; height: 15px; background: var(--accent-color); cursor: pointer; border: 2px solid var(--bg-color); border-radius: 50%; }
+        input[type="range"]::-moz-range-thumb { width: 15px; height: 15px; background: var(--accent-color); cursor: pointer; border: 2px solid var(--bg-color); border-radius: 50%; }
+
+    </style>
+</head>
+<body>
+    <div id="info-panel">
+        <div class="panel-header">
+            <h1>logical fractal engine</h1>
+            <span id="ui-toggle-btn">~ to hide</span>
+        </div>
+        <p>a toy universe defined by a logical fractal. change presets or tweak the constants. click screen for wasd flight. explore the structure of chaos with the phase map.</p>
+        <div class="controls">
+            <div class="sliders">
+                <div class="slider-control"><label for="c1">c1</label><input type="range" id="c1"></div>
+                <div class="slider-control"><label for="c2">c2</label><input type="range" id="c2"></div>
+                <div class="slider-control"><label for="c3">c3 (time)</label><input type="range" id="c3"></div>
+                <div class="slider-control"><label for="c4">feedback</label><input type="range" id="c4"></div>
+            </div>
+            <div class="buttons">
+                <div class="button-row"><button id="preset-btn">cycle preset</button></div>
+                 <div class="button-row">
+                    <button id="view-btn">phase map</button>
+                    <button id="axis-btn">cycle axis</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <canvas id="c"></canvas>
+
+    <script id="vertex-shader" type="x-shader/x-vertex">
+        attribute float a_progress;
+        
+        uniform mat4 u_vp_matrix;
+        uniform float u_time;
+
+        // --- Per-Instance Attributes ---
+        attribute vec3 a_world_position;
+        attribute vec3 a_grid_coord;
+        attribute vec3 a_meta_coord;
+        attribute vec3 a_meta_meta_coord;
+        attribute float a_c1;
+        attribute float a_c2;
+        attribute float a_c3;
+        attribute float a_c4;
+
+        varying vec3 v_color;
+
+        const float PI = 3.14159265359;
+
+        vec3 hsv2rgb(vec3 c) {
+            vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+            vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+            return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+        }
+
+        void main() {
+            // --- The Logical Fractal ---
+            vec4 state = vec4(a_grid_coord.x, a_grid_coord.y, a_grid_coord.z, 0.0);
+            vec3 meta_influence1 = a_meta_coord * 2.0 - 1.0;
+            vec3 meta_influence2 = a_meta_meta_coord * 2.0 - 1.0;
+            float time_influence = u_time * a_c3;
+
+            for (int i = 0; i < 5; i++) {
+                vec4 last_state = state;
+                state.x = sin(last_state.y * meta_influence1.x * a_c1 - last_state.z * meta_influence2.y + time_influence);
+                state.y = cos(last_state.z * meta_influence1.y * a_c1 - last_state.x * meta_influence2.z - time_influence);
+                state.z = sin(last_state.x * meta_influence1.z * a_c1 - last_state.y * meta_influence2.x + time_influence);
+                state.w = cos(last_state.x + last_state.y + last_state.z + time_influence * a_c2);
+                state = mix(last_state, state, a_c4);
+            }
+
+            // --- Deconstruction to Geometry ---
+            float morph = state.x * 0.5 + 0.5;
+            float twist = state.y * 50.0;
+            float length = mix(50.0, 500.0, state.z * 0.5 + 0.5);
+            float radius = mix(50.0, 500.0, state.w * 0.5 + 0.5);
+            float bend = state.y * state.w * PI;
+
+            vec3 line_pos = vec3(0.0, -length/2.0 + a_progress * length, 0.0);
+            float circle_angle = a_progress * 2.0 * PI;
+            vec3 circle_pos = vec3(cos(circle_angle) * radius, 0.0, sin(circle_angle) * radius);
+            vec3 pos = mix(line_pos, circle_pos, morph);
+            
+            float twist_angle = a_progress * twist + time_influence;
+            mat2 twist_mat = mat2(cos(twist_angle), -sin(twist_angle), sin(twist_angle), cos(twist_angle));
+            pos.xz = twist_mat * pos.xz;
+            
+            mat2 bend_mat = mat2(cos(bend), -sin(bend), sin(bend), cos(bend));
+            pos.yz = bend_mat * pos.yz;
+
+            gl_Position = u_vp_matrix * vec4(a_world_position + pos, 1.0);
+            
+            // --- Deconstruction to Color ---
+            float hue = fract(state.x + a_meta_coord.x * a_c2);
+            float sat = mix(0.5, 1.0, state.y * 0.5 + 0.5);
+            float bright = mix(0.5, 1.0, state.z * 0.5 + 0.5);
+            float pulse_freq = (state.w * 0.5 + 0.5) * 10.0;
+            vec3 base_color = hsv2rgb(vec3(hue, sat, bright));
+            float pulse = sin(u_time * pulse_freq + a_progress * PI) * 0.5 + 0.5;
+            v_color = base_color * pulse;
+        }
+    </script>
+    <script id="fragment-shader" type="x-shader/x-fragment">
+        precision mediump float;
+        varying vec3 v_color;
+        void main() {
+            gl_FragColor = vec4(v_color, 0.85);
+        }
+    </script>
+
+    <script>
+    const canvas = document.getElementById('c');
+    const gl = canvas.getContext('webgl', { antialias: true });
+    const ext = gl.getExtension('ANGLE_instanced_arrays');
+
+    const infoPanel = document.getElementById('info-panel');
+    const panelHeader = document.querySelector('.panel-header');
+    const uiToggleBtn = document.getElementById('ui-toggle-btn');
+    const presetBtn = document.getElementById('preset-btn');
+    const viewBtn = document.getElementById('view-btn');
+    const axisBtn = document.getElementById('axis-btn');
+    const sliders = {
+        c1: document.getElementById('c1'),
+        c2: document.getElementById('c2'),
+        c3: document.getElementById('c3'),
+        c4: document.getElementById('c4'),
+    };
+
+    if (!gl || !ext) {
+        document.body.innerHTML = 'this simulation requires webgl and instancing support.';
+    }
+
+    // --- State ---
+    const GRID_SIZE = 3, META_GRID_SIZE = 3, META_META_GRID_SIZE = 3;
+    const SHAPE_RESOLUTION = 60;
+    let time = 0, timeRate = 0.1, lastTime = performance.now();
+    let isDirty = true;
+    const keys = {};
+    const camera = { position: { x: 0, y: 0, z: 1000 }, pitch: 0, yaw: 0, moveSpeed: 30.0 };
+    const sliceMode = { active: false, viewAxis: 'Y', primaryIndex: 0, zoom: 1.0 };
+    let paramMode = 0;
+    let isDragging = false;
+    let dragOffset = { x: 0, y: 0 };
+    
+    const presets = [
+        { name: "Emergence", c1: 2.5, c2: 1.0, c3: 0.2, c4: 0.6 },
+        { name: "Breathing Chaos", c1: 3.0, c2: 0.5, c3: 0.5, c4: 0.8 },
+        { name: "Tendrils", c1: -1.5, c2: 2.5, c3: 0.1, c4: 0.9 },
+        { name: "Static Webs", c1: 0.9, c2: 0.9, c3: 0.0, c4: 0.95 },
+    ];
+    let params = {};
+
+    // --- WebGL Setup ---
+    function createShader(type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            console.error('Shader error:', gl.getShaderInfoLog(shader));
+            gl.deleteShader(shader); return null;
+        }
+        return shader;
+    }
+    const vs = createShader(gl.VERTEX_SHADER, document.getElementById('vertex-shader').text);
+    const fs = createShader(gl.FRAGMENT_SHADER, document.getElementById('fragment-shader').text);
+    const program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        console.error('Program link error:', gl.getProgramInfoLog(program));
+    }
+
+    const uniforms = {
+        vp_matrix: gl.getUniformLocation(program, 'u_vp_matrix'),
+        time: gl.getUniformLocation(program, 'u_time'),
+    };
+    
+    const INSTANCE_ATTRIBUTES = {
+        world_position: { size: 3 }, grid_coord: { size: 3 }, meta_coord: { size: 3 },
+        meta_meta_coord: { size: 3 }, c1: { size: 1 }, c2: { size: 1 },
+        c3: { size: 1 }, c4: { size: 1 },
+    };
+    const instanceData = { buffers: {}, capacity: 0, count: 0 };
+    
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+    gl.enable(gl.DEPTH_TEST);
+
+    const progressAttrib = gl.getAttribLocation(program, 'a_progress');
+    gl.enableVertexAttribArray(progressAttrib);
+    const progressData = new Float32Array(SHAPE_RESOLUTION).map((_, i) => i / (SHAPE_RESOLUTION - 1));
+    const shapeVBO = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, shapeVBO);
+    gl.bufferData(gl.ARRAY_BUFFER, progressData, gl.STATIC_DRAW);
+    gl.vertexAttribPointer(progressAttrib, 1, gl.FLOAT, false, 0, 0);
+
+    for (const key in INSTANCE_ATTRIBUTES) {
+        const attr = INSTANCE_ATTRIBUTES[key];
+        attr.location = gl.getAttribLocation(program, `a_${key}`);
+        instanceData.buffers[key] = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, instanceData.buffers[key]);
+        gl.enableVertexAttribArray(attr.location);
+        gl.vertexAttribPointer(attr.location, attr.size, gl.FLOAT, false, 0, 0);
+        ext.vertexAttribDivisorANGLE(attr.location, 1);
+    }
+
+    // --- Matrix Math ---
+    function mat4Identity() { return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
+    function mat4Multiply(a, b) {
+        const out = mat4Identity();
+        let a00=a[0],a01=a[1],a02=a[2],a03=a[3],a10=a[4],a11=a[5],a12=a[6],a13=a[7],a20=a[8],a21=a[9],a22=a[10],a23=a[11],a30=a[12],a31=a[13],a32=a[14],a33=a[15];
+        let b0=b[0],b1=b[1],b2=b[2],b3=b[3]; out[0]=b0*a00+b1*a10+b2*a20+b3*a30; out[1]=b0*a01+b1*a11+b2*a21+b3*a31; out[2]=b0*a02+b1*a12+b2*a22+b3*a32; out[3]=b0*a03+b1*a13+b2*a23+b3*a33;
+        b0=b[4];b1=b[5];b2=b[6];b3=b[7]; out[4]=b0*a00+b1*a10+b2*a20+b3*a30; out[5]=b0*a01+b1*a11+b2*a21+b3*a31; out[6]=b0*a02+b1*a12+b2*a22+b3*a32; out[7]=b0*a03+b1*a13+b2*a23+b3*a33;
+        b0=b[8];b1=b[9];b2=b[10];b3=b[11]; out[8]=b0*a00+b1*a10+b2*a20+b3*a30; out[9]=b0*a01+b1*a11+b2*a21+b3*a31; out[10]=b0*a02+b1*a12+b2*a22+b3*a32; out[11]=b0*a03+b1*a13+b2*a23+b3*a33;
+        b0=b[12];b1=b[13];b2=b[14];b3=b[15]; out[12]=b0*a00+b1*a10+b2*a20+b3*a30; out[13]=b0*a01+b1*a11+b2*a21+b3*a31; out[14]=b0*a02+b1*a12+b2*a22+b3*a32; out[15]=b0*a03+b1*a13+b2*a23+b3*a33;
+        return out;
+    }
+    function mat4Perspective(fov, aspect, near, far) { const f = 1 / Math.tan(fov/2), nf=1/(near-far); return new Float32Array([f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0]); }
+    function mat4Orthographic(l, r, b, t, n, f) { const lr=1/(l-r),bt=1/(b-t),nf=1/(n-f); return new Float32Array([-2*lr,0,0,0, 0,-2*bt,0,0, 0,0,2*nf,0, (l+r)*lr,(t+b)*bt,(f+n)*nf,1]); }
+    function mat4Translate(m, v) { return mat4Multiply(m, [1,0,0,0, 0,1,0,0, 0,0,1,0, v[0],v[1],v[2],1]); }
+    function mat4RotateX(m, rad) { const s=Math.sin(rad),c=Math.cos(rad); return mat4Multiply(m, [1,0,0,0, 0,c,s,0, 0,-s,c,0, 0,0,0,1]); }
+    function mat4RotateY(m, rad) { const s=Math.sin(rad),c=Math.cos(rad); return mat4Multiply(m, [c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1]); }
+    
+    // --- Data Generation & Interaction ---
+    function applyPreset(modeIndex) {
+        paramMode = modeIndex % presets.length;
+        params = { ...presets[paramMode] };
+        presetBtn.textContent = params.name.toLowerCase();
+        for (const key in sliders) {
+            const slider = sliders[key];
+            if (slider) {
+                slider.min = (key === 'c4') ? 0 : -5;
+                slider.max = (key === 'c4') ? 1 : 5;
+                slider.step = 0.01;
+                slider.value = params[key];
+            }
+        }
+        isDirty = true;
+    }
+    
+    function updateAndBindInstanceData() {
+        if (!isDirty) return;
+        const instances = [];
+        const loop = (size, callback) => {
+            const h = Math.floor(size / 2);
+            for (let i=-h; i<=h; i++) for (let j=-h; j<=h; j++) for (let k=-h; k<=h; k++) {
+                const indices = [i, j, k];
+                const coord = size <= 1 ? [0.5,0.5,0.5] : [(i+h)/(size-1), (j+h)/(size-1), (k+h)/(size-1)];
+                callback(indices, coord);
+            }
+        };
+        const axis_map = { 'X': 0, 'Y': 1, 'Z': 2 };
+
+        loop(META_META_GRID_SIZE, (mmi_indices, mm_coord) => {
+            loop(META_GRID_SIZE, (mi_indices, m_coord) => {
+                if (sliceMode.active && mi_indices[axis_map[sliceMode.viewAxis]] !== sliceMode.primaryIndex) return;
+                loop(GRID_SIZE, (i_indices, g_coord) => {
+                    const grid_spacing = 350, meta_spacing = 1200, mmeta_spacing = 4000;
+                    let pos = [ mmi_indices[0] * mmeta_spacing, mmi_indices[1] * mmeta_spacing, mmi_indices[2] * mmeta_spacing ];
+                    pos[0] += mi_indices[0] * meta_spacing; pos[1] += mi_indices[1] * meta_spacing; pos[2] += mi_indices[2] * meta_spacing;
+                    pos[0] += i_indices[0] * grid_spacing; pos[1] += i_indices[1] * grid_spacing; pos[2] += i_indices[2] * grid_spacing;
+                    
+                    instances.push({
+                        world_position: pos, grid_coord: g_coord, meta_coord: m_coord, meta_meta_coord: mm_coord,
+                        c1: params.c1, c2: params.c2, c3: params.c3, c4: params.c4,
+                    });
+                });
+            });
+        });
+
+        instanceData.count = instances.length;
+        if (instanceData.count === 0) { isDirty = false; return; }
+
+        if (instanceData.capacity < instanceData.count) {
+            instanceData.capacity = instanceData.count;
+            for (const key in INSTANCE_ATTRIBUTES) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, instanceData.buffers[key]);
+                gl.bufferData(gl.ARRAY_BUFFER, instanceData.capacity * INSTANCE_ATTRIBUTES[key].size * 4, gl.DYNAMIC_DRAW);
+            }
+        }
+        
+        const dataArrays = {};
+        for (const key in INSTANCE_ATTRIBUTES) dataArrays[key] = new Float32Array(instanceData.count * INSTANCE_ATTRIBUTES[key].size);
+
+        for (let i = 0; i < instanceData.count; i++) {
+            const inst = instances[i];
+            const attrs = INSTANCE_ATTRIBUTES;
+            dataArrays.world_position.set(inst.world_position, i * attrs.world_position.size);
+            dataArrays.grid_coord.set(inst.grid_coord, i * attrs.grid_coord.size);
+            dataArrays.meta_coord.set(inst.meta_coord, i * attrs.meta_coord.size);
+            dataArrays.meta_meta_coord.set(inst.meta_meta_coord, i * attrs.meta_meta_coord.size);
+            ['c1', 'c2', 'c3', 'c4'].forEach(k => { dataArrays[k][i] = inst[k]; });
+        }
+
+        for (const key in INSTANCE_ATTRIBUTES) {
+            gl.bindBuffer(gl.ARRAY_BUFFER, instanceData.buffers[key]);
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, dataArrays[key]);
+        }
+        isDirty = false;
+    }
+
+    function updateCamera() {
+        if (document.pointerLockElement !== canvas) return;
+        const speed = camera.moveSpeed;
+        const forward = { x: Math.sin(camera.yaw)*Math.cos(camera.pitch), y: -Math.sin(camera.pitch), z: -Math.cos(camera.yaw)*Math.cos(camera.pitch) };
+        const right = { x: Math.cos(camera.yaw), y: 0, z: Math.sin(camera.yaw) };
+        if (keys['w']) { camera.position.x += forward.x * speed; camera.position.y += forward.y * speed; camera.position.z += forward.z * speed; }
+        if (keys['s']) { camera.position.x -= forward.x * speed; camera.position.y -= forward.y * speed; camera.position.z -= forward.z * speed; }
+        if (keys['d']) { camera.position.x += right.x * speed; camera.position.z += right.z * speed; }
+        if (keys['a']) { camera.position.x -= right.x * speed; camera.position.z -= right.z * speed; }
+        if (keys[' ']) { camera.position.y += speed; }
+        if (keys['shift']) { camera.position.y -= speed; }
+    }
+    
+    // --- Render Loop ---
+    function animate() {
+        const now = performance.now();
+        time += ((now - lastTime) / 1000.0) * timeRate;
+        lastTime = now;
+        if (!sliceMode.active) updateCamera();
+        
+        const { clientWidth: w, clientHeight: h } = gl.canvas;
+        gl.viewport(0, 0, w, h);
+        gl.clearColor(0.02, 0.02, 0.03, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        if (isDirty) updateAndBindInstanceData();
+        if (instanceData.count === 0) { requestAnimationFrame(animate); return; }
+
+        let projMatrix, viewMatrix;
+        if (sliceMode.active) {
+            const orthoSize = (META_GRID_SIZE * 1200) / sliceMode.zoom;
+            projMatrix = mat4Orthographic(-orthoSize*w/h/2, orthoSize*w/h/2, -orthoSize/2, orthoSize/2, -50000, 50000);
+            viewMatrix = mat4Identity();
+            if (sliceMode.viewAxis === 'Y') viewMatrix = mat4RotateX(viewMatrix, Math.PI / 2);
+            else if (sliceMode.viewAxis === 'X') viewMatrix = mat4RotateY(viewMatrix, -Math.PI / 2);
+        } else {
+            projMatrix = mat4Perspective(45 * Math.PI / 180, w / h, 10, 50000);
+            viewMatrix = mat4Identity();
+            viewMatrix = mat4RotateX(viewMatrix, camera.pitch);
+            viewMatrix = mat4RotateY(viewMatrix, camera.yaw);
+            viewMatrix = mat4Translate(viewMatrix, [-camera.position.x, -camera.position.y, -camera.position.z]);
+        }
+        const vpMatrix = mat4Multiply(projMatrix, viewMatrix);
+
+        gl.useProgram(program);
+        gl.uniformMatrix4fv(uniforms.vp_matrix, false, vpMatrix);
+        gl.uniform1f(uniforms.time, time);
+        ext.drawArraysInstancedANGLE(gl.LINE_LOOP, 0, SHAPE_RESOLUTION, instanceData.count);
+        requestAnimationFrame(animate);
+    }
+    
+    function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; isDirty = true; }
+
+    function toggleUI(force) {
+        infoPanel.classList.toggle('hidden', force);
+    }
+
+    // --- Event Listeners ---
+    for(const key in sliders) { sliders[key].addEventListener('input', e => { params[key] = parseFloat(e.target.value); isDirty = true; }); }
+    presetBtn.addEventListener('click', () => applyPreset(paramMode + 1));
+    viewBtn.addEventListener('click', () => { sliceMode.active = !sliceMode.active; isDirty = true; });
+    axisBtn.addEventListener('click', () => { sliceMode.viewAxis = {'Y':'X', 'X':'Z', 'Z':'Y'}[sliceMode.viewAxis]; isDirty = true; });
+    uiToggleBtn.addEventListener('click', () => toggleUI());
+    
+    window.addEventListener('keydown', e => { 
+        keys[e.key.toLowerCase()] = true;
+        if (e.key === '`') {
+            toggleUI();
+            if (document.pointerLockElement === canvas) {
+                document.exitPointerLock();
+            }
+        }
+    });
+    window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+    canvas.addEventListener('mousedown', () => { if (!sliceMode.active) canvas.requestPointerLock(); });
+    window.addEventListener('mousemove', e => {
+        if (document.pointerLockElement === canvas) {
+            camera.yaw += e.movementX * 0.002;
+            camera.pitch = Math.max(-Math.PI/2+0.01, Math.min(Math.PI/2-0.01, camera.pitch + e.movementY * 0.002));
+        } else if (isDragging) {
+            infoPanel.style.left = `${e.clientX - dragOffset.x}px`;
+            infoPanel.style.top = `${e.clientY - dragOffset.y}px`;
+        }
+    });
+    window.addEventListener('mouseup', () => {
+        isDragging = false;
+    });
+    panelHeader.addEventListener('mousedown', e => {
+        if (e.target.id === 'ui-toggle-btn') return;
+        isDragging = true;
+        dragOffset = {
+            x: e.clientX - infoPanel.offsetLeft,
+            y: e.clientY - infoPanel.offsetTop
+        };
+        e.preventDefault();
+    });
+
+    window.addEventListener('wheel', e => {
+        if (!sliceMode.active) return;
+        e.preventDefault();
+        const halfGrid = Math.floor(META_GRID_SIZE / 2);
+        if (e.ctrlKey) { sliceMode.zoom = Math.max(0.1, Math.min(5.0, sliceMode.zoom * (e.deltaY > 0 ? 1.1 : 1/1.1))); } 
+        else { sliceMode.primaryIndex = Math.max(-halfGrid, Math.min(halfGrid, sliceMode.primaryIndex - Math.sign(e.deltaY))); }
+        isDirty = true;
+    }, { passive: false });
+    window.addEventListener('resize', resize);
+    window.addEventListener('contextmenu', e => e.preventDefault());
+    document.addEventListener('pointerlockchange', () => {
+        canvas.dataset.locked = document.pointerLockElement === canvas;
+        if (!canvas.dataset.locked) Object.keys(keys).forEach(k => keys[k] = false);
+    });
+
+    // --- Init ---
+    applyPreset(0);
+    resize();
+    animate();
+
+    </script>
+</body>
+</html>
